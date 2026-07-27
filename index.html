@@ -6,6 +6,7 @@
 <title>동선 플래너</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800&family=IBM+Plex+Sans+KR:wght@400;500;600&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <style>
   :root{
     --bg: #F4FAFF;
@@ -145,6 +146,18 @@
     font-family:'IBM Plex Mono', monospace;
   }
   .time-input:focus{outline:none; border-color:var(--gold);}
+  .time-input.empty{
+    border-style:dashed;
+    border-color:var(--line);
+    color:var(--slate);
+    opacity:.8;
+  }
+  .section-sub-hint{
+    font-size:11px;
+    color:var(--slate);
+    margin:-8px 0 0;
+    line-height:1.5;
+  }
   .time-hint{
     font-size:10.5px;
     color:var(--gold-bright);
@@ -181,6 +194,24 @@
   .empty-hint{
     color:var(--slate); font-size:13px; line-height:1.6;
     border:1px dashed var(--line); padding:14px; border-radius:2px;
+  }
+
+  .quick-add-stay{
+    margin-top:4px;
+    background:var(--ink-2);
+    border:1px dashed var(--gold-bright);
+    border-radius:2px;
+    padding:9px 10px;
+    display:flex;
+    flex-direction:column;
+    gap:6px;
+  }
+  .quick-add-label{
+    font-size:12px;
+    color:var(--parchment-dim);
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
   }
 
   .search-box{display:flex; flex-direction:column; gap:8px;}
@@ -520,7 +551,73 @@
   .overview-place-row .t{width:48px; flex-shrink:0; color:var(--gold-bright); font-family:'IBM Plex Mono', monospace; font-size:12px;}
   .overview-place-row .memo{color:var(--slate); font-size:12px;}
   .overview-leg-note{font-size:11px; color:var(--slate); padding-left:56px;}
-  .overview-empty{color:var(--slate); font-size:13px;}
+  .overview-actions{
+    display:flex;
+    gap:8px;
+    flex-wrap:wrap;
+    margin:0 0 22px;
+    padding-right:34px;
+  }
+  .overview-actions .file-btn{font-size:12px;}
+
+  #shareToast{
+    position:fixed;
+    bottom:24px;
+    left:50%;
+    transform:translateX(-50%) translateY(20px);
+    background:var(--ink);
+    color:var(--parchment);
+    border:1px solid var(--gold);
+    padding:12px 18px;
+    border-radius:3px;
+    font-size:13px;
+    z-index:100;
+    opacity:0;
+    pointer-events:none;
+    transition:opacity .2s ease, transform .2s ease;
+    max-width:90vw;
+  }
+  #shareToast.show{
+    opacity:1;
+    transform:translateX(-50%) translateY(0);
+  }
+
+  .share-banner{
+    display:none;
+    background:var(--ink-2);
+    border-bottom:1px solid var(--gold);
+    color:var(--parchment);
+    padding:12px 32px;
+    font-size:13.5px;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    flex-wrap:wrap;
+  }
+  .share-banner.show{display:flex;}
+  .share-banner .actions{display:flex; gap:8px;}
+  .share-banner button{
+    border:none;
+    padding:7px 14px;
+    font-size:12.5px;
+    border-radius:2px;
+    cursor:pointer;
+  }
+  .share-banner .accept{background:var(--gold); color:var(--ink); font-weight:600;}
+  .share-banner .dismiss{background:transparent; color:var(--slate); border:1px solid var(--slate);}
+
+  @media print{
+    body *{visibility:hidden;}
+    #overviewModal, #overviewModal *{visibility:visible;}
+    #overviewModal{
+      position:absolute; inset:0; background:#fff; padding:0; display:block !important;
+    }
+    .overview-card{
+      box-shadow:none; border:none; max-height:none; max-width:none; width:100%;
+      padding:20px;
+    }
+    .overview-close, .overview-actions{display:none !important;}
+  }
 </style>
 </head>
 <body>
@@ -541,6 +638,14 @@
 <div id="keyBanner">
   ⚠ 카카오맵 API 키가 설정되지 않았어요. 코드 상단의 <code>const KAKAO_APP_KEY</code> 값을 발급받은 JavaScript 키로 바꿔주세요.
   (카카오 개발자센터 → 내 애플리케이션 → 앱 키 → JavaScript 키, 그리고 플랫폼에 사용 도메인을 등록해야 합니다.)
+</div>
+
+<div class="share-banner" id="shareBanner">
+  <span id="shareBannerText"></span>
+  <div class="actions">
+    <button class="accept" id="shareAcceptBtn">내 목록에 추가</button>
+    <button class="dismiss" id="shareDismissBtn">닫기</button>
+  </div>
 </div>
 
 <div class="app">
@@ -597,6 +702,7 @@
     <div id="mapAddFormWrap"></div>
 
     <div class="section-label">방문 순서</div>
+    <div class="section-sub-hint">시간은 몇 곳만 넣어도 괜찮아요. 나머지는 예상 시간을 안내해드려요.</div>
     <div class="place-list" id="placeList"></div>
 
     <div class="summary" id="summary"></div>
@@ -614,11 +720,18 @@
 </div>
 
 <div id="overviewModal">
-  <div class="overview-card">
+  <div class="overview-card" id="overviewCard">
     <button class="overview-close" id="overviewCloseBtn">✕</button>
+    <div class="overview-actions" id="overviewActions">
+      <button class="file-btn" id="overviewImageBtn">🖼 이미지로 저장</button>
+      <button class="file-btn" id="overviewPrintBtn">🖨 인쇄 · PDF로 저장</button>
+      <button class="file-btn" id="shareLinkBtn">🔗 공유 링크 만들기</button>
+    </div>
     <div id="overviewContent"></div>
   </div>
 </div>
+
+<div id="shareToast"></div>
 
 <script>
 /* ============================================================
@@ -670,6 +783,7 @@ function loadKakaoSDK(){
 function initFallbackMapArea(){
   document.getElementById('kakaoMap').innerHTML =
     '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#6B7688;font-size:13px;padding:20px;text-align:center;">지도를 표시하려면 카카오맵 API 키 설정이 필요해요</div>';
+  renderAll();
 }
 
 function initMap(){
@@ -721,6 +835,7 @@ function renderMapAddForm(){
         <button class="confirm" id="mapConfirmAdd">이 위치에 추가</button>
         <button class="cancel" id="mapCancelAdd">취소</button>
       </div>
+      <button type="button" class="stay-btn" id="mapConfirmStay" style="align-self:stretch; text-align:center;">🏨 대신 이 위치를 숙소로 저장</button>
     </div>
   `;
   const input = document.getElementById('mapPlaceName');
@@ -735,6 +850,7 @@ function renderMapAddForm(){
     });
   });
   document.getElementById('mapConfirmAdd').addEventListener('click', confirmMapAdd);
+  document.getElementById('mapConfirmStay').addEventListener('click', confirmMapAddAsStay);
   document.getElementById('mapCancelAdd').addEventListener('click', () => {
     pendingCoord = null;
     renderMapAddForm();
@@ -745,6 +861,14 @@ function confirmMapAdd(){
   const input = document.getElementById('mapPlaceName');
   const name = input.value.trim() || pendingDefaultName;
   addPlace(name, pendingCoord.lat, pendingCoord.lng, pendingMode);
+  pendingCoord = null;
+  renderMapAddForm();
+}
+
+function confirmMapAddAsStay(){
+  const input = document.getElementById('mapPlaceName');
+  const name = input.value.trim() || pendingDefaultName;
+  setStay(name, pendingCoord.lat, pendingCoord.lng);
   pendingCoord = null;
   renderMapAddForm();
 }
@@ -910,7 +1034,7 @@ function renderStayCard(){
   const wrap = document.getElementById('stayBody');
   const stay = currentDay().stay;
   if(!stay){
-    wrap.innerHTML = '<div class="empty-hint">아직 지정된 숙소가 없어요.<br>왼쪽 검색 결과에서 "이 Day의 숙소로 지정"을 눌러주세요.</div>';
+    wrap.innerHTML = '<div class="empty-hint">아직 지정된 숙소가 없어요.<br>검색 결과의 "숙소로 지정" 버튼을 누르거나, 지도에서 "+ 지도 클릭으로 추가"를 켜고 위치를 클릭한 뒤 "숙소로 저장"을 눌러주세요.</div>';
     return;
   }
   wrap.innerHTML = `
@@ -1111,55 +1235,73 @@ function renderPlaceList(){
   const list = document.getElementById('placeList');
   const day = currentDay();
   list.innerHTML = '';
+
   if(day.places.length === 0){
     list.innerHTML = '<div class="empty-hint">아직 등록된 장소가 없어요.<br>왼쪽에서 검색하거나 지도를 클릭해 추가해보세요.</div>';
-    return;
+  } else {
+    day.places.forEach((p, idx) => {
+      if(idx > 0){
+        const { km, min, cfg } = legInfo(day.places[idx-1], p, p.mode);
+        const note = document.createElement('div');
+        note.className = 'leg-note mono';
+        note.innerHTML = `↓ <span class="mode-icon">${cfg.icon} ${cfg.label}</span> 약 ${min}분 (${km.toFixed(1)}km)`;
+        note.title = '클릭해서 교통수단 변경';
+        note.addEventListener('click', () => cyclePlaceMode(idx));
+        list.appendChild(note);
+      }
+      const hint = suggestedArrival(day, idx);
+      const item = document.createElement('div');
+      item.className = 'place-item';
+      item.innerHTML = `
+        <div class="place-item-top">
+          <div class="place-num">${idx+1}</div>
+          <div class="place-name" title="${p.name}">${p.name}</div>
+          <button class="icon-btn up" title="위로">▲</button>
+          <button class="icon-btn down" title="아래로">▼</button>
+          <button class="icon-btn del" title="삭제">✕</button>
+        </div>
+        <div class="place-item-bottom">
+          <input type="time" class="time-input${p.time ? '' : ' empty'}" value="${p.time || ''}">
+          ${(!p.time && hint) ? `<span class="time-hint">~${hint}?</span>` : ''}
+          <input type="text" class="memo-input" placeholder="메모 (예: 예약 완료, 마감시간 등)" value="${(p.memo || '').replace(/"/g,'&quot;')}">
+        </div>
+      `;
+      item.querySelector('.up').addEventListener('click', () => moveplace(idx, -1));
+      item.querySelector('.down').addEventListener('click', () => moveplace(idx, 1));
+      item.querySelector('.del').addEventListener('click', () => deletePlace(idx));
+
+      const timeInput = item.querySelector('.time-input');
+      timeInput.addEventListener('change', () => updatePlaceTime(idx, timeInput.value));
+
+      const hintEl = item.querySelector('.time-hint');
+      if(hintEl){
+        hintEl.addEventListener('click', () => updatePlaceTime(idx, hint));
+      }
+
+      const memoInput = item.querySelector('.memo-input');
+      memoInput.addEventListener('blur', () => updatePlaceMemo(idx, memoInput.value));
+      memoInput.addEventListener('keydown', (e) => { if(e.key === 'Enter') memoInput.blur(); });
+
+      list.appendChild(item);
+    });
   }
-  day.places.forEach((p, idx) => {
-    if(idx > 0){
-      const { km, min, cfg } = legInfo(day.places[idx-1], p, p.mode);
-      const note = document.createElement('div');
-      note.className = 'leg-note mono';
-      note.innerHTML = `↓ <span class="mode-icon">${cfg.icon} ${cfg.label}</span> 약 ${min}분 (${km.toFixed(1)}km)`;
-      note.title = '클릭해서 교통수단 변경';
-      note.addEventListener('click', () => cyclePlaceMode(idx));
-      list.appendChild(note);
-    }
-    const hint = suggestedArrival(day, idx);
-    const item = document.createElement('div');
-    item.className = 'place-item';
-    item.innerHTML = `
-      <div class="place-item-top">
-        <div class="place-num">${idx+1}</div>
-        <div class="place-name" title="${p.name}">${p.name}</div>
-        <button class="icon-btn up" title="위로">▲</button>
-        <button class="icon-btn down" title="아래로">▼</button>
-        <button class="icon-btn del" title="삭제">✕</button>
-      </div>
-      <div class="place-item-bottom">
-        <input type="time" class="time-input" value="${p.time || ''}">
-        ${(!p.time && hint) ? `<span class="time-hint">~${hint}?</span>` : ''}
-        <input type="text" class="memo-input" placeholder="메모 (예: 예약 완료, 마감시간 등)" value="${(p.memo || '').replace(/"/g,'&quot;')}">
+
+  if(day.stay){
+    const row = document.createElement('div');
+    row.className = 'quick-add-stay';
+    row.innerHTML = `
+      <span class="quick-add-label">🏨 "${day.stay.name}"로 돌아가기</span>
+      <div class="mode-row">
+        ${MODE_ORDER.map(m => `<button type="button" class="mode-btn" data-mode="${m}">${MODE_CONFIG[m].icon} ${MODE_CONFIG[m].label}</button>`).join('')}
       </div>
     `;
-    item.querySelector('.up').addEventListener('click', () => moveplace(idx, -1));
-    item.querySelector('.down').addEventListener('click', () => moveplace(idx, 1));
-    item.querySelector('.del').addEventListener('click', () => deletePlace(idx));
-
-    const timeInput = item.querySelector('.time-input');
-    timeInput.addEventListener('change', () => updatePlaceTime(idx, timeInput.value));
-
-    const hintEl = item.querySelector('.time-hint');
-    if(hintEl){
-      hintEl.addEventListener('click', () => updatePlaceTime(idx, hint));
-    }
-
-    const memoInput = item.querySelector('.memo-input');
-    memoInput.addEventListener('blur', () => updatePlaceMemo(idx, memoInput.value));
-    memoInput.addEventListener('keydown', (e) => { if(e.key === 'Enter') memoInput.blur(); });
-
-    list.appendChild(item);
-  });
+    row.querySelectorAll('.mode-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        addPlace(day.stay.name, day.stay.lat, day.stay.lng, btn.dataset.mode);
+      });
+    });
+    list.appendChild(row);
+  }
 }
 
 function clearMapOverlays(){
@@ -1397,8 +1539,111 @@ document.getElementById('overviewModal').addEventListener('click', (e) => {
   if(e.target.id === 'overviewModal') closeOverview();
 });
 
+/* ---------- 이미지로 저장 / 인쇄 ---------- */
+function showToast(message){
+  const toast = document.getElementById('shareToast');
+  toast.textContent = message;
+  toast.classList.add('show');
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => toast.classList.remove('show'), 3200);
+}
+
+document.getElementById('overviewImageBtn').addEventListener('click', () => {
+  const card = document.getElementById('overviewCard');
+  const bgColor = getComputedStyle(document.body).getPropertyValue('--bg').trim() || '#ffffff';
+  html2canvas(card, {
+    backgroundColor: bgColor,
+    ignoreElements: (el) => el.id === 'overviewActions' || el.classList.contains('overview-close'),
+    scale: 2
+  }).then(canvas => {
+    const link = document.createElement('a');
+    const safeName = currentTrip().name.replace(/[\\/:*?"<>|]/g, '').trim() || 'travel-plan';
+    link.download = `${safeName}.png`;
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+  }).catch(() => {
+    alert('이미지 저장에 실패했어요. 인쇄 · PDF 저장으로 시도해보세요.');
+  });
+});
+
+document.getElementById('overviewPrintBtn').addEventListener('click', () => {
+  window.print();
+});
+
+/* ---------- 공유 링크 ---------- */
+function encodeTripForShare(trip){
+  const payload = JSON.stringify({ name: trip.name, days: trip.days });
+  return btoa(unescape(encodeURIComponent(payload)));
+}
+
+function decodeSharedTrip(encoded){
+  const payload = decodeURIComponent(escape(atob(encoded)));
+  return JSON.parse(payload);
+}
+
+document.getElementById('shareLinkBtn').addEventListener('click', () => {
+  const trip = currentTrip();
+  const encoded = encodeTripForShare(trip);
+  const url = `${location.origin}${location.pathname}#share=${encoded}`;
+  if(url.length > 7500){
+    alert('이 여행은 장소/일정이 많아서 링크가 너무 길어져요. "이 여행 파일로 저장" 후 파일로 공유해주세요.');
+    return;
+  }
+  navigator.clipboard.writeText(url).then(() => {
+    showToast('공유 링크가 복사됐어요. 카카오톡 등으로 붙여넣어 보내주세요.');
+  }).catch(() => {
+    prompt('아래 링크를 복사해서 공유하세요:', url);
+  });
+});
+
+function checkIncomingSharedTrip(){
+  const hash = location.hash;
+  if(!hash.startsWith('#share=')) return;
+  const encoded = hash.slice('#share='.length);
+  let sharedTrip;
+  try{
+    sharedTrip = decodeSharedTrip(encoded);
+  }catch(err){
+    return;
+  }
+  if(!sharedTrip || !Array.isArray(sharedTrip.days)) return;
+
+  const banner = document.getElementById('shareBanner');
+  document.getElementById('shareBannerText').textContent =
+    `공유받은 여행이 있어요: "${sharedTrip.name || '이름 없는 여행'}" (${sharedTrip.days.length}일)`;
+  banner.classList.add('show');
+
+  document.getElementById('shareAcceptBtn').addEventListener('click', () => {
+    const days = sharedTrip.days.map((d, i) => ({
+      id: Date.now() + i + 1,
+      name: d.name || `Day ${i+1}`,
+      date: typeof d.date === 'string' ? d.date : '',
+      places: Array.isArray(d.places) ? d.places : [],
+      stay: (d.stay && typeof d.stay === 'object') ? d.stay : null,
+      transportBookings: Array.isArray(d.transportBookings) ? d.transportBookings : []
+    }));
+    const newTrip = {
+      id: Date.now(),
+      name: sharedTrip.name || '공유받은 여행',
+      days: days.length ? days : [{ id: Date.now()+1, name: 'Day 1', date:'', places:[], stay:null, transportBookings:[] }],
+      currentDayId: (days[0] && days[0].id) || Date.now()+1
+    };
+    state.trips.push(newTrip);
+    state.currentTripId = newTrip.id;
+    banner.classList.remove('show');
+    history.replaceState(null, '', location.pathname);
+    renderAll();
+  }, { once: true });
+
+  document.getElementById('shareDismissBtn').addEventListener('click', () => {
+    banner.classList.remove('show');
+    history.replaceState(null, '', location.pathname);
+  }, { once: true });
+}
+
 /* ---------- 시작 ---------- */
 loadKakaoSDK();
+checkIncomingSharedTrip();
 </script>
 </body>
 </html>
