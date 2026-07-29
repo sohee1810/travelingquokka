@@ -215,6 +215,18 @@
   }
 
   .search-box{display:flex; flex-direction:column; gap:8px;}
+  .search-scope-row{display:flex; gap:6px;}
+  .scope-btn{
+    flex:1;
+    background:transparent;
+    border:1px solid var(--slate);
+    color:var(--parchment-dim);
+    padding:6px;
+    font-size:12px;
+    border-radius:2px;
+    cursor:pointer;
+  }
+  .scope-btn.selected{background:var(--gold); border-color:var(--gold); color:var(--ink); font-weight:600;}
   .search-row{display:flex; gap:6px;}
   .search-row input{
     flex:1;
@@ -692,6 +704,10 @@
 
     <div class="section-label">장소 검색</div>
     <div class="search-box">
+      <div class="search-scope-row">
+        <button type="button" class="scope-btn selected" data-scope="domestic">🇰🇷 국내</button>
+        <button type="button" class="scope-btn" data-scope="overseas">🌍 해외</button>
+      </div>
       <div class="search-row">
         <input type="text" id="searchInput" placeholder="예: 남산타워, 성수동 카페">
         <button id="searchBtn">검색</button>
@@ -967,15 +983,61 @@ document.getElementById('tbAddBtn').addEventListener('click', addTransportBookin
 updateTbTypeButtons();
 
 /* ---------- 장소 검색 ---------- */
+let searchScope = 'domestic';
+
+document.querySelectorAll('.scope-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    searchScope = btn.dataset.scope;
+    document.querySelectorAll('.scope-btn').forEach(b => b.classList.toggle('selected', b === btn));
+    document.getElementById('searchInput').placeholder = searchScope === 'overseas'
+      ? '예: Eiffel Tower, Shibuya Station'
+      : '예: 남산타워, 성수동 카페';
+  });
+});
+
 document.getElementById('searchBtn').addEventListener('click', doSearch);
 document.getElementById('searchInput').addEventListener('keydown', (e) => {
   if(e.key === 'Enter') doSearch();
 });
 
+function renderSearchResultRow(name, addr, lat, lng){
+  const resultsWrap = document.getElementById('searchResults');
+  const row = document.createElement('div');
+  row.className = 'search-result';
+  const isFirst = currentDay().places.length === 0;
+  const modeButtonsHtml = isFirst
+    ? `<button class="mode-btn" data-mode="walk">+ 이 Day의 첫 장소로 추가</button>`
+    : MODE_ORDER.map(m =>
+        `<button class="mode-btn" data-mode="${m}">${MODE_CONFIG[m].icon} ${MODE_CONFIG[m].label}</button>`
+      ).join('');
+  row.innerHTML = `
+    <div class="name">${name}</div>
+    <div class="addr">${addr || ''}</div>
+    <div class="mode-row">${modeButtonsHtml}</div>
+    <button class="stay-btn" type="button">🏨 이 Day의 숙소로 지정</button>
+  `;
+  row.querySelectorAll('.mode-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      addPlace(name, lat, lng, btn.dataset.mode);
+    });
+  });
+  row.querySelector('.stay-btn').addEventListener('click', () => {
+    setStay(name, lat, lng);
+  });
+  resultsWrap.appendChild(row);
+}
+
 function doSearch(){
   const q = document.getElementById('searchInput').value.trim();
   const resultsWrap = document.getElementById('searchResults');
   if(!q) return;
+  resultsWrap.innerHTML = '<div class="search-empty">검색 중...</div>';
+
+  if(searchScope === 'overseas'){
+    doOverseasSearch(q, resultsWrap);
+    return;
+  }
+
   if(!places){
     resultsWrap.innerHTML = '<div class="search-empty">카카오맵 API 키를 먼저 설정해주세요.</div>';
     return;
@@ -983,35 +1045,33 @@ function doSearch(){
   places.keywordSearch(q, (data, status) => {
     resultsWrap.innerHTML = '';
     if(status !== kakao.maps.services.Status.OK || data.length === 0){
-      resultsWrap.innerHTML = '<div class="search-empty">검색 결과가 없어요.</div>';
+      resultsWrap.innerHTML = '<div class="search-empty">검색 결과가 없어요. 해외 지역이면 위에서 "🌍 해외"를 선택해보세요.</div>';
       return;
     }
     data.slice(0, 6).forEach(item => {
-      const row = document.createElement('div');
-      row.className = 'search-result';
-      const isFirst = currentDay().places.length === 0;
-      const modeButtonsHtml = isFirst
-        ? `<button class="mode-btn" data-mode="walk">+ 이 Day의 첫 장소로 추가</button>`
-        : MODE_ORDER.map(m =>
-            `<button class="mode-btn" data-mode="${m}">${MODE_CONFIG[m].icon} ${MODE_CONFIG[m].label}</button>`
-          ).join('');
-      row.innerHTML = `
-        <div class="name">${item.place_name}</div>
-        <div class="addr">${item.road_address_name || item.address_name}</div>
-        <div class="mode-row">${modeButtonsHtml}</div>
-        <button class="stay-btn" type="button">🏨 이 Day의 숙소로 지정</button>
-      `;
-      row.querySelectorAll('.mode-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-          addPlace(item.place_name, parseFloat(item.y), parseFloat(item.x), btn.dataset.mode);
-        });
-      });
-      row.querySelector('.stay-btn').addEventListener('click', () => {
-        setStay(item.place_name, parseFloat(item.y), parseFloat(item.x));
-      });
-      resultsWrap.appendChild(row);
+      renderSearchResultRow(item.place_name, item.road_address_name || item.address_name, parseFloat(item.y), parseFloat(item.x));
     });
   });
+}
+
+function doOverseasSearch(q, resultsWrap){
+  const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=6&accept-language=ko`;
+  fetch(url)
+    .then(res => res.json())
+    .then(data => {
+      resultsWrap.innerHTML = '';
+      if(!Array.isArray(data) || data.length === 0){
+        resultsWrap.innerHTML = '<div class="search-empty">검색 결과가 없어요. 다른 검색어(영문 등)로 시도해보세요.</div>';
+        return;
+      }
+      data.forEach(item => {
+        const shortName = (item.display_name || '').split(',')[0];
+        renderSearchResultRow(shortName || q, item.display_name, parseFloat(item.lat), parseFloat(item.lon));
+      });
+    })
+    .catch(() => {
+      resultsWrap.innerHTML = '<div class="search-empty">검색 중 문제가 생겼어요. 잠시 후 다시 시도해주세요.</div>';
+    });
 }
 
 /* ---------- 상태 조작 ---------- */
