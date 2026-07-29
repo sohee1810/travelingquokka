@@ -391,6 +391,30 @@
 
   #fileInput{display:none;}
 
+  .country-row select{
+    width:100%;
+    background:var(--ink-2);
+    border:1px solid var(--slate);
+    color:var(--parchment);
+    padding:8px 9px;
+    font-size:12.5px;
+    border-radius:2px;
+    font-family:inherit;
+  }
+  .country-row select:focus{outline:none; border-color:var(--gold);}
+  .country-info-card{
+    background:var(--ink-2);
+    border-left:3px solid var(--gold-bright);
+    border-radius:2px;
+    padding:9px 10px;
+    display:flex;
+    flex-direction:column;
+    gap:3px;
+    font-size:12px;
+    color:var(--parchment-dim);
+  }
+  .country-info-card b{color:var(--parchment); font-size:13px;}
+
   .date-row{display:flex; align-items:center; gap:8px;}
   .date-row input[type="date"]{
     background:var(--ink-2);
@@ -673,6 +697,11 @@
     <div class="section-label">여행</div>
     <div class="tabs" id="tripTabs"></div>
 
+    <div class="country-row">
+      <select id="tripCountrySelect"></select>
+    </div>
+    <div id="countryInfoCard"></div>
+
     <div class="section-label">Day</div>
     <div class="tabs" id="tabs"></div>
 
@@ -781,7 +810,7 @@ let kakaoMap, kakaoGeocoder;
 let kakaoRuntime = { markers: [], legOverlays: [], polyline: null, stayMarker: null };
 let mapScope = 'domestic';
 let state = {
-  trips: [{ id: 1, name: '나의 여행', days: [{ id: 1, name: 'Day 1', date: '', places: [], stay: null, transportBookings: [] }], currentDayId: 1 }],
+  trips: [{ id: 1, name: '나의 여행', country: null, days: [{ id: 1, name: 'Day 1', date: '', places: [], stay: null, transportBookings: [] }], currentDayId: 1 }],
   currentTripId: 1
 };
 let addMode = false;
@@ -967,6 +996,65 @@ function haversineKm(a, b){
   const h = Math.sin(dLat/2)**2 + Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLng/2)**2;
   return 2 * R * Math.asin(Math.sqrt(h));
 }
+const COUNTRY_INFO = {
+  jp_tokyo:    { label: '🇯🇵 일본 · 도쿄',       lat: 35.6762, lng: 139.6503, utc: 9,   plug: ['A','B'], voltage: '100V' },
+  jp_osaka:    { label: '🇯🇵 일본 · 오사카',     lat: 34.6937, lng: 135.5023, utc: 9,   plug: ['A','B'], voltage: '100V' },
+  cn_beijing:  { label: '🇨🇳 중국 · 베이징',     lat: 39.9042, lng: 116.4074, utc: 8,   plug: ['A','C','I'], voltage: '220V' },
+  tw_taipei:   { label: '🇹🇼 대만 · 타이베이',   lat: 25.0330, lng: 121.5654, utc: 8,   plug: ['A','B'], voltage: '110V' },
+  hk:          { label: '🇭🇰 홍콩',             lat: 22.3193, lng: 114.1694, utc: 8,   plug: ['G'], voltage: '220V' },
+  vn_hanoi:    { label: '🇻🇳 베트남 · 하노이',   lat: 21.0278, lng: 105.8342, utc: 7,   plug: ['A','C'], voltage: '220V' },
+  vn_hcmc:     { label: '🇻🇳 베트남 · 호치민',   lat: 10.8231, lng: 106.6297, utc: 7,   plug: ['A','C'], voltage: '220V' },
+  vn_danang:   { label: '🇻🇳 베트남 · 다낭',     lat: 16.0544, lng: 108.2022, utc: 7,   plug: ['A','C'], voltage: '220V' },
+  th_bangkok:  { label: '🇹🇭 태국 · 방콕',       lat: 13.7563, lng: 100.5018, utc: 7,   plug: ['A','B','C'], voltage: '220V' },
+  sg:          { label: '🇸🇬 싱가포르',         lat: 1.3521,  lng: 103.8198, utc: 8,   plug: ['G'], voltage: '230V' },
+  ph_manila:   { label: '🇵🇭 필리핀 · 마닐라',   lat: 14.5995, lng: 120.9842, utc: 8,   plug: ['A','B','C'], voltage: '220V' },
+  ph_cebu:     { label: '🇵🇭 필리핀 · 세부',     lat: 10.3157, lng: 123.8854, utc: 8,   plug: ['A','B','C'], voltage: '220V' },
+  id_bali:     { label: '🇮🇩 인도네시아 · 발리', lat: -8.4095, lng: 115.1889, utc: 8,   plug: ['C','F'], voltage: '230V' },
+  my_kl:       { label: '🇲🇾 말레이시아 · 쿠알라룸푸르', lat: 3.1390, lng: 101.6869, utc: 8, plug: ['G'], voltage: '240V' },
+  us_ny:       { label: '🇺🇸 미국 · 뉴욕',       lat: 40.7128, lng: -74.0060, utc: -5,  plug: ['A','B'], voltage: '120V' },
+  us_la:       { label: '🇺🇸 미국 · 로스앤젤레스', lat: 34.0522, lng: -118.2437, utc: -8, plug: ['A','B'], voltage: '120V' },
+  us_hawaii:   { label: '🇺🇸 미국 · 하와이',     lat: 21.3069, lng: -157.8583, utc: -10, plug: ['A','B'], voltage: '120V' },
+  guam:        { label: '🇬🇺 괌',               lat: 13.4443, lng: 144.7937, utc: 10,  plug: ['A','B'], voltage: '110V' },
+  uk_london:   { label: '🇬🇧 영국 · 런던',       lat: 51.5074, lng: -0.1278,  utc: 0,   plug: ['G'], voltage: '230V' },
+  fr_paris:    { label: '🇫🇷 프랑스 · 파리',     lat: 48.8566, lng: 2.3522,   utc: 1,   plug: ['C','E'], voltage: '230V' },
+  de_berlin:   { label: '🇩🇪 독일 · 베를린',     lat: 52.5200, lng: 13.4050,  utc: 1,   plug: ['C','F'], voltage: '230V' },
+  it_rome:     { label: '🇮🇹 이탈리아 · 로마',   lat: 41.9028, lng: 12.4964,  utc: 1,   plug: ['C','F','L'], voltage: '230V' },
+  es_madrid:   { label: '🇪🇸 스페인 · 마드리드', lat: 40.4168, lng: -3.7038,  utc: 1,   plug: ['C','F'], voltage: '230V' },
+  nl_amsterdam:{ label: '🇳🇱 네덜란드 · 암스테르담', lat: 52.3676, lng: 4.9041, utc: 1, plug: ['C','F'], voltage: '230V' },
+  ch_zurich:   { label: '🇨🇭 스위스 · 취리히',   lat: 47.3769, lng: 8.5417,   utc: 1,   plug: ['C','J'], voltage: '230V' },
+  cz_prague:   { label: '🇨🇿 체코 · 프라하',     lat: 50.0755, lng: 14.4378,  utc: 1,   plug: ['C','E'], voltage: '230V' },
+  at_vienna:   { label: '🇦🇹 오스트리아 · 빈',   lat: 48.2082, lng: 16.3738,  utc: 1,   plug: ['C','F'], voltage: '230V' },
+  gr_athens:   { label: '🇬🇷 그리스 · 아테네',   lat: 37.9838, lng: 23.7275,  utc: 2,   plug: ['C','F'], voltage: '230V' },
+  pt_lisbon:   { label: '🇵🇹 포르투갈 · 리스본', lat: 38.7223, lng: -9.1393,  utc: 0,   plug: ['C','F'], voltage: '230V' },
+  au_sydney:   { label: '🇦🇺 호주 · 시드니',     lat: -33.8688, lng: 151.2093, utc: 10, plug: ['I'], voltage: '230V' },
+  nz_auckland: { label: '🇳🇿 뉴질랜드 · 오클랜드', lat: -36.8485, lng: 174.7633, utc: 12, plug: ['I'], voltage: '230V' },
+  ca_toronto:  { label: '🇨🇦 캐나다 · 토론토',   lat: 43.6532, lng: -79.3832, utc: -5,  plug: ['A','B'], voltage: '120V' },
+  ca_vancouver:{ label: '🇨🇦 캐나다 · 밴쿠버',   lat: 49.2827, lng: -123.1207, utc: -8, plug: ['A','B'], voltage: '120V' },
+  tr_istanbul: { label: '🇹🇷 튀르키예 · 이스탄불', lat: 41.0082, lng: 28.9784, utc: 3,  plug: ['C','F'], voltage: '230V' },
+  ae_dubai:    { label: '🇦🇪 UAE · 두바이',      lat: 25.2048, lng: 55.2708,  utc: 4,   plug: ['G','C'], voltage: '220V' },
+  in_delhi:    { label: '🇮🇳 인도 · 델리',       lat: 28.7041, lng: 77.1025,  utc: 5.5, plug: ['C','D','M'], voltage: '230V' },
+  mv:          { label: '🇲🇻 몰디브',           lat: 4.1755,  lng: 73.5093,  utc: 5,   plug: ['G','D'], voltage: '230V' },
+  kh_siemreap: { label: '🇰🇭 캄보디아 · 시엠립', lat: 13.3671, lng: 103.8448, utc: 7,   plug: ['A','C','G'], voltage: '230V' }
+};
+const KOREA_PLUG = ['C','F'];
+const KOREA_VOLTAGE = '220V';
+const KOREA_UTC = 9;
+
+function timeDiffLabel(country){
+  const diff = country.utc - KOREA_UTC;
+  if(diff === 0) return '한국과 시차 없어요';
+  const abs = Math.abs(diff);
+  const abstext = Number.isInteger(abs) ? abs : abs.toFixed(1);
+  return diff > 0 ? `한국보다 ${abstext}시간 빨라요` : `한국보다 ${abstext}시간 느려요`;
+}
+
+function plugLabel(country){
+  const samePlug = country.plug.some(p => KOREA_PLUG.includes(p));
+  const sameVoltage = country.voltage === KOREA_VOLTAGE;
+  if(samePlug && sameVoltage) return '콘센트/전압 한국과 동일 (어댑터 불필요)';
+  return `${country.plug.join('/')}타입 · ${country.voltage} — 돼지코(어댑터) 필요해요`;
+}
+
 const MODE_CONFIG = {
   walk:    { label: '도보',    icon: '🚶', kmh: 4  },
   transit: { label: '대중교통', icon: '🚌', kmh: 22 },
@@ -1039,6 +1127,18 @@ document.getElementById('dayDateInput').addEventListener('change', (e) => {
   renderTabs();
 });
 document.getElementById('fillDatesBtn').addEventListener('click', fillSequentialDates);
+
+/* ---------- 여행 국가/도시 ---------- */
+document.getElementById('tripCountrySelect').addEventListener('change', (e) => {
+  const trip = currentTrip();
+  trip.country = e.target.value || null;
+  renderCountrySelector();
+  const info = trip.country ? COUNTRY_INFO[trip.country] : null;
+  if(info && leafletMap){
+    leafletMap.setView([info.lat, info.lng], 11);
+    if(mapScope === 'overseas') renderMap();
+  }
+});
 
 /* ---------- 교통편 일정 폼 ---------- */
 function updateTbTypeButtons(){
@@ -1124,18 +1224,24 @@ function doSearch(){
 }
 
 function doOverseasSearch(q, resultsWrap){
-  const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=6&accept-language=ko`;
+  const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=8&lang=en`;
   fetch(url)
     .then(res => res.json())
     .then(data => {
       resultsWrap.innerHTML = '';
-      if(!Array.isArray(data) || data.length === 0){
-        resultsWrap.innerHTML = '<div class="search-empty">검색 결과가 없어요. 다른 검색어(영문 등)로 시도해보세요.</div>';
+      const features = (data && Array.isArray(data.features)) ? data.features : [];
+      if(features.length === 0){
+        resultsWrap.innerHTML = '<div class="search-empty">검색 결과가 없어요. 다른 검색어로 시도해보세요.</div>';
         return;
       }
-      data.forEach(item => {
-        const shortName = (item.display_name || '').split(',')[0];
-        renderSearchResultRow(shortName || q, item.display_name, parseFloat(item.lat), parseFloat(item.lon));
+      features.forEach(f => {
+        const props = f.properties || {};
+        const name = props.name || q;
+        const addr = [props.street, props.city || props.district, props.state, props.country]
+          .filter(Boolean).join(', ');
+        const lng = f.geometry.coordinates[0];
+        const lat = f.geometry.coordinates[1];
+        renderSearchResultRow(name, addr, lat, lng);
       });
     })
     .catch(() => {
@@ -1277,6 +1383,7 @@ function addTrip(){
   const newTrip = {
     id: Date.now() + 1,
     name: name.trim() || `여행 ${state.trips.length + 1}`,
+    country: null,
     days: [{ id: dayId, name: 'Day 1', date: '', places: [], stay: null, transportBookings: [] }],
     currentDayId: dayId
   };
@@ -1352,6 +1459,38 @@ function renderTabs(){
   addBtn.title = '날짜 추가';
   addBtn.addEventListener('click', addDay);
   wrap.appendChild(addBtn);
+}
+
+function renderCountrySelector(){
+  const select = document.getElementById('tripCountrySelect');
+  if(select.options.length === 0){
+    const noneOpt = document.createElement('option');
+    noneOpt.value = '';
+    noneOpt.textContent = '국가/도시 설정 안 함';
+    select.appendChild(noneOpt);
+    Object.keys(COUNTRY_INFO).forEach(key => {
+      const opt = document.createElement('option');
+      opt.value = key;
+      opt.textContent = COUNTRY_INFO[key].label;
+      select.appendChild(opt);
+    });
+  }
+  const trip = currentTrip();
+  select.value = trip.country || '';
+
+  const card = document.getElementById('countryInfoCard');
+  const info = trip.country ? COUNTRY_INFO[trip.country] : null;
+  if(!info){
+    card.innerHTML = '';
+    return;
+  }
+  card.innerHTML = `
+    <div class="country-info-card">
+      <b>${info.label}</b>
+      <span>🕐 ${timeDiffLabel(info)}</span>
+      <span>🔌 ${plugLabel(info)}</span>
+    </div>
+  `;
 }
 
 function renderDateRow(){
@@ -1517,6 +1656,10 @@ function renderMapLeaflet(){
     leafletMap.setView(boundsPoints[0], 15);
   } else if(boundsPoints.length > 1){
     leafletMap.fitBounds(L.latLngBounds(boundsPoints), { padding: [40, 40] });
+  } else {
+    const trip = currentTrip();
+    const info = trip.country ? COUNTRY_INFO[trip.country] : null;
+    if(info) leafletMap.setView([info.lat, info.lng], 11);
   }
 }
 
@@ -1616,6 +1759,7 @@ function renderSummary(){
 
 function renderAll(){
   renderTripTabs();
+  renderCountrySelector();
   renderTabs();
   renderDateRow();
   renderStayCard();
@@ -1639,7 +1783,7 @@ document.getElementById('addModeBtn').addEventListener('click', () => {
 /* ---------- 파일로 저장 / 불러오기 (여행 단위) ---------- */
 document.getElementById('exportBtn').addEventListener('click', () => {
   const trip = currentTrip();
-  const dataStr = JSON.stringify({ name: trip.name, days: trip.days }, null, 2);
+  const dataStr = JSON.stringify({ name: trip.name, country: trip.country || null, days: trip.days }, null, 2);
   const blob = new Blob([dataStr], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -1682,6 +1826,7 @@ document.getElementById('fileInput').addEventListener('change', (e) => {
       const newTrip = {
         id: Date.now(),
         name: importedName || '가져온 여행',
+        country: (typeof parsed.country === 'string' && COUNTRY_INFO[parsed.country]) ? parsed.country : null,
         days,
         currentDayId: days[0].id
       };
@@ -1701,7 +1846,9 @@ document.getElementById('fileInput').addEventListener('change', (e) => {
 function renderOverviewContent(){
   const trip = currentTrip();
   const wrap = document.getElementById('overviewContent');
-  let html = `<h2 class="display overview-title">${trip.name}</h2><p class="overview-sub">${trip.days.length}일 일정</p>`;
+  const info = trip.country ? COUNTRY_INFO[trip.country] : null;
+  let html = `<h2 class="display overview-title">${trip.name}</h2>`;
+  html += `<p class="overview-sub">${trip.days.length}일 일정${info ? ` · ${info.label} · ${timeDiffLabel(info)} · ${plugLabel(info)}` : ''}</p>`;
   trip.days.forEach((day) => {
     html += `<div class="overview-day"><h3>${day.name}${day.date ? `<span class="day-date">${formatDateLabel(day.date)}</span>` : ''}</h3>`;
     if(day.stay){
@@ -1777,7 +1924,7 @@ document.getElementById('overviewPrintBtn').addEventListener('click', () => {
 
 /* ---------- 공유 링크 ---------- */
 function encodeTripForShare(trip){
-  const payload = JSON.stringify({ name: trip.name, days: trip.days });
+  const payload = JSON.stringify({ name: trip.name, country: trip.country || null, days: trip.days });
   return btoa(unescape(encodeURIComponent(payload)));
 }
 
@@ -1830,6 +1977,7 @@ function checkIncomingSharedTrip(){
     const newTrip = {
       id: Date.now(),
       name: sharedTrip.name || '공유받은 여행',
+      country: (typeof sharedTrip.country === 'string' && COUNTRY_INFO[sharedTrip.country]) ? sharedTrip.country : null,
       days: days.length ? days : [{ id: Date.now()+1, name: 'Day 1', date:'', places:[], stay:null, transportBookings:[] }],
       currentDayId: (days[0] && days[0].id) || Date.now()+1
     };
