@@ -7,6 +7,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800&family=IBM+Plex+Sans+KR:wght@400;500;600&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <style>
   :root{
     --bg: #F4FAFF;
@@ -355,6 +357,13 @@
     min-height:520px;
   }
   #kakaoMap{width:100%; height:100%; min-height:520px;}
+  .map-layer{
+    position:absolute;
+    inset:0;
+    display:none;
+  }
+  .map-layer.active{display:block;}
+  #leafletMapEl{width:100%; height:100%; min-height:520px;}
 
   .pin-el{
     width:26px; height:26px;
@@ -366,7 +375,6 @@
     font-weight:700;
     font-size:12px;
     display:flex; align-items:center; justify-content:center;
-    transform:translate(-50%,-50%);
     box-shadow:0 2px 6px rgba(0,0,0,0.4);
   }
   .leg-el{
@@ -377,8 +385,8 @@
     font-size:10.5px;
     padding:2px 6px;
     border-radius:2px;
-    transform:translate(-50%,-50%);
     white-space:nowrap;
+    display:inline-block;
   }
 
   #fileInput{display:none;}
@@ -510,7 +518,7 @@
     width:26px; height:26px;
     display:flex; align-items:center; justify-content:center;
     font-size:12px;
-    transform:translate(-50%,-100%) rotate(45deg);
+    transform:rotate(45deg);
     box-shadow:0 2px 6px rgba(0,0,0,0.4);
   }
   .stay-el span{transform:rotate(-45deg);}
@@ -637,7 +645,7 @@
 <header>
   <div>
     <h1 class="display">동선 플래너</h1>
-    <p>카카오맵에서 장소를 검색해 추가하고, 실제 좌표 기준으로 동선을 확인하세요.</p>
+    <p>국내·해외 장소를 검색해 추가하고, 실제 좌표 기준으로 동선을 확인하세요.</p>
   </div>
   <div class="file-actions">
     <button class="file-btn" id="overviewBtn">📋 전체 일정 보기</button>
@@ -730,7 +738,8 @@
       <button id="addModeBtn">+ 지도 클릭으로 추가</button>
     </div>
     <div class="map-canvas-holder" id="mapHolder">
-      <div id="kakaoMap"></div>
+      <div id="kakaoMap" class="map-layer active"></div>
+      <div id="leafletMapEl" class="map-layer"></div>
     </div>
   </div>
 </div>
@@ -751,7 +760,11 @@
 
 <script>
 /* ============================================================
-   카카오맵 API 키 설정
+   지도 자체는 Leaflet + OpenStreetMap을 사용해서 국내/해외 상관없이
+   항상 렌더링돼요. 아래 카카오 키는 "국내 장소 검색"에만 쓰여요
+   (해외 검색은 OpenStreetMap Nominatim을 사용, 별도 키 불필요).
+
+   카카오맵 API 키 설정 (국내 검색용)
    1) https://developers.kakao.com 에서 애플리케이션 생성
    2) [내 애플리케이션 > 앱 설정 > 앱 > 플랫폼 키 > JavaScript 키]에서
       키를 복사하고, 같은 화면의 "JavaScript SDK 도메인"에 사용할 주소를 등록
@@ -759,10 +772,14 @@
       - 로컬 서버를 쓰는 경우: 예) http://localhost:8000
    3) [내 애플리케이션 > 카카오맵 > 사용 설정]의 상태를 ON으로 변경
       (2026-07-21부터 이 단계가 추가로 필요해졌습니다)
+   이 설정이 없거나 실패해도 지도 표시와 해외 검색은 정상 작동해요.
    ============================================================ */
 const KAKAO_APP_KEY = '5db5035d6333175aa406d9d72c0a9740';
 
-let map, geocoder, places;
+let leafletMap, layerGroup, places;
+let kakaoMap, kakaoGeocoder;
+let kakaoRuntime = { markers: [], legOverlays: [], polyline: null, stayMarker: null };
+let mapScope = 'domestic';
 let state = {
   trips: [{ id: 1, name: '나의 여행', days: [{ id: 1, name: 'Day 1', date: '', places: [], stay: null, transportBookings: [] }], currentDayId: 1 }],
   currentTripId: 1
@@ -772,49 +789,100 @@ let pendingCoord = null;
 let pendingDefaultName = '';
 let pendingMode = 'walk';
 let pendingBookingType = 'flight';
-let runtime = { markers: [], legOverlays: [], polyline: null, stayMarker: null };
 
 function currentTrip(){ return state.trips.find(t => t.id === state.currentTripId); }
 function currentDay(){ return currentTrip().days.find(d => d.id === currentTrip().currentDayId); }
 
-/* ---------- 카카오맵 SDK 로드 ---------- */
+/* ---------- 해외용 지도 (Leaflet + CARTO 타일, 키 불필요) ---------- */
+function initLeafletMap(){
+  leafletMap = L.map('leafletMapEl', { zoomControl: true }).setView([37.5665, 126.9780], 12);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    maxZoom: 20,
+    attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
+  }).addTo(leafletMap);
+  layerGroup = L.layerGroup().addTo(leafletMap);
+
+  leafletMap.on('click', (e) => {
+    if(!addMode) return;
+    const lat = e.latlng.lat, lng = e.latlng.lng;
+    pendingCoord = { lat, lng };
+    pendingDefaultName = '새 장소';
+    pendingMode = 'walk';
+    renderMapAddForm();
+    reverseGeocode(lat, lng, (name) => {
+      if(pendingCoord && pendingCoord.lat === lat && pendingCoord.lng === lng){
+        pendingDefaultName = name;
+        renderMapAddForm();
+      }
+    });
+  });
+}
+
+function reverseGeocode(lat, lng, callback){
+  const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&accept-language=ko`;
+  fetch(url)
+    .then(res => res.json())
+    .then(data => {
+      if(data && data.display_name){
+        callback(data.display_name.split(',').slice(0, 2).join(',').trim());
+      } else {
+        callback('새 장소');
+      }
+    })
+    .catch(() => callback('새 장소'));
+}
+
+/* ---------- 국내/해외 지도 전환 ---------- */
+function setMapScope(scope){
+  mapScope = scope;
+  document.getElementById('kakaoMap').classList.toggle('active', scope === 'domestic');
+  document.getElementById('leafletMapEl').classList.toggle('active', scope === 'overseas');
+  if(scope === 'overseas' && leafletMap){
+    requestAnimationFrame(() => leafletMap.invalidateSize());
+  }
+  if(scope === 'domestic' && kakaoMap){
+    setTimeout(() => kakaoMap.relayout(), 0);
+  }
+  renderMap();
+}
+
+/* ---------- 카카오맵 SDK 로드 (국내 장소 검색 전용) ---------- */
 function loadKakaoSDK(){
   if(KAKAO_APP_KEY === 'YOUR_KAKAO_JAVASCRIPT_KEY'){
     document.getElementById('keyBanner').style.display = 'block';
-    initFallbackMapArea();
+    showKakaoMapFallback('카카오맵 API 키 설정이 필요해요');
     return;
   }
   const script = document.createElement('script');
   script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${KAKAO_APP_KEY}&libraries=services&autoload=false`;
-  script.onload = () => kakao.maps.load(initMap);
+  script.onload = () => kakao.maps.load(initKakaoMapInstance);
   script.onerror = () => {
     document.getElementById('keyBanner').style.display = 'block';
     document.getElementById('keyBanner').innerHTML =
-      '⚠ 카카오맵 SDK 로드에 실패했어요. API 키와, 개발자센터에 등록한 도메인이 현재 주소와 일치하는지 확인해주세요.';
-    initFallbackMapArea();
+      '⚠ 카카오맵 SDK 로드에 실패했어요. 국내 지도/검색이 동작하지 않을 수 있어요. (해외 탭은 정상 작동해요) API 키와, 개발자센터에 등록한 도메인이 현재 주소와 일치하는지 확인해주세요.';
+    showKakaoMapFallback('카카오맵 로드에 실패했어요');
   };
   document.head.appendChild(script);
 }
 
-function initFallbackMapArea(){
+function showKakaoMapFallback(message){
   document.getElementById('kakaoMap').innerHTML =
-    '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#6B7688;font-size:13px;padding:20px;text-align:center;">지도를 표시하려면 카카오맵 API 키 설정이 필요해요</div>';
-  renderAll();
+    `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#6E869D;font-size:13px;padding:20px;text-align:center;">${message}<br>위에서 "🌍 해외" 탭을 선택하면 다른 지도로 계속 쓸 수 있어요.</div>`;
 }
 
-function initMap(){
+function initKakaoMapInstance(){
   const container = document.getElementById('kakaoMap');
-  map = new kakao.maps.Map(container, {
+  kakaoMap = new kakao.maps.Map(container, {
     center: new kakao.maps.LatLng(37.5665, 126.9780), // 서울시청 기준 기본 위치
     level: 6
   });
-  geocoder = new kakao.maps.services.Geocoder();
+  kakaoGeocoder = new kakao.maps.services.Geocoder();
   places = new kakao.maps.services.Places();
 
-  kakao.maps.event.addListener(map, 'click', (mouseEvent) => {
+  kakao.maps.event.addListener(kakaoMap, 'click', (mouseEvent) => {
     if(!addMode) return;
     const latlng = mouseEvent.latLng;
-    geocoder.coord2Address(latlng.getLng(), latlng.getLat(), (result, status) => {
+    kakaoGeocoder.coord2Address(latlng.getLng(), latlng.getLat(), (result, status) => {
       let name = '새 장소';
       if(status === kakao.maps.services.Status.OK && result[0]){
         name = result[0].road_address ? result[0].road_address.address_name : result[0].address.address_name;
@@ -826,7 +894,7 @@ function initMap(){
     });
   });
 
-  renderAll();
+  renderMap();
 }
 
 function renderMapAddForm(){
@@ -992,6 +1060,7 @@ document.querySelectorAll('.scope-btn').forEach(btn => {
     document.getElementById('searchInput').placeholder = searchScope === 'overseas'
       ? '예: Eiffel Tower, Shibuya Station'
       : '예: 남산타워, 성수동 카페';
+    setMapScope(searchScope);
   });
 });
 
@@ -1365,18 +1434,94 @@ function renderPlaceList(){
 }
 
 function clearMapOverlays(){
-  runtime.markers.forEach(m => m.setMap(null));
-  runtime.legOverlays.forEach(o => o.setMap(null));
-  if(runtime.polyline) runtime.polyline.setMap(null);
-  if(runtime.stayMarker) runtime.stayMarker.setMap(null);
-  runtime.markers = [];
-  runtime.legOverlays = [];
-  runtime.polyline = null;
-  runtime.stayMarker = null;
+  if(layerGroup) layerGroup.clearLayers();
+  kakaoRuntime.markers.forEach(m => m.setMap(null));
+  kakaoRuntime.legOverlays.forEach(o => o.setMap(null));
+  if(kakaoRuntime.polyline) kakaoRuntime.polyline.setMap(null);
+  if(kakaoRuntime.stayMarker) kakaoRuntime.stayMarker.setMap(null);
+  kakaoRuntime.markers = [];
+  kakaoRuntime.legOverlays = [];
+  kakaoRuntime.polyline = null;
+  kakaoRuntime.stayMarker = null;
 }
 
 function renderMap(){
-  if(!map) return;
+  if(mapScope === 'overseas'){
+    renderMapLeaflet();
+  } else {
+    renderMapKakao();
+  }
+}
+
+function renderMapLeaflet(){
+  if(!leafletMap) return;
+  clearMapOverlays();
+  const day = currentDay();
+  const boundsPoints = [];
+
+  if(day.places.length > 0){
+    day.places.forEach((p, idx) => {
+      boundsPoints.push([p.lat, p.lng]);
+      const icon = L.divIcon({
+        className: '',
+        html: `<div class="pin-el">${idx + 1}</div>`,
+        iconSize: [26, 26],
+        iconAnchor: [13, 13]
+      });
+      L.marker([p.lat, p.lng], {
+        icon,
+        title: [p.name, p.time, p.memo].filter(Boolean).join(' · ')
+      }).addTo(layerGroup);
+    });
+
+    if(day.places.length > 1){
+      const path = day.places.map(p => [p.lat, p.lng]);
+      L.polyline(path, {
+        color: '#C99A3D',
+        weight: 3,
+        opacity: 0.9,
+        dashArray: '6 6'
+      }).addTo(layerGroup);
+
+      for(let i = 1; i < day.places.length; i++){
+        const a = day.places[i-1], b = day.places[i];
+        const { km, cfg } = legInfo(a, b, b.mode);
+        const midLat = (a.lat + b.lat) / 2;
+        const midLng = (a.lng + b.lng) / 2;
+        const legIcon = L.divIcon({
+          className: '',
+          html: `<div class="leg-el">${cfg.icon} ${km.toFixed(1)}km</div>`,
+          iconSize: [90, 20],
+          iconAnchor: [45, 10]
+        });
+        L.marker([midLat, midLng], { icon: legIcon, interactive: false }).addTo(layerGroup);
+      }
+    }
+  }
+
+  if(day.stay){
+    boundsPoints.push([day.stay.lat, day.stay.lng]);
+    const stayIcon = L.divIcon({
+      className: '',
+      html: `<div class="stay-el"><span>🏨</span></div>`,
+      iconSize: [26, 26],
+      iconAnchor: [13, 26]
+    });
+    L.marker([day.stay.lat, day.stay.lng], {
+      icon: stayIcon,
+      title: `숙소: ${day.stay.name}`
+    }).addTo(layerGroup);
+  }
+
+  if(boundsPoints.length === 1){
+    leafletMap.setView(boundsPoints[0], 15);
+  } else if(boundsPoints.length > 1){
+    leafletMap.fitBounds(L.latLngBounds(boundsPoints), { padding: [40, 40] });
+  }
+}
+
+function renderMapKakao(){
+  if(!kakaoMap) return;
   clearMapOverlays();
   const day = currentDay();
   const bounds = new kakao.maps.LatLngBounds();
@@ -1394,21 +1539,21 @@ function renderMap(){
       const overlay = new kakao.maps.CustomOverlay({
         position: pos,
         content: el,
-        map: map,
+        map: kakaoMap,
         zIndex: 3
       });
-      runtime.markers.push(overlay);
+      kakaoRuntime.markers.push(overlay);
     });
 
     if(day.places.length > 1){
       const path = day.places.map(p => new kakao.maps.LatLng(p.lat, p.lng));
-      runtime.polyline = new kakao.maps.Polyline({
+      kakaoRuntime.polyline = new kakao.maps.Polyline({
         path,
         strokeWeight: 3,
         strokeColor: '#C99A3D',
         strokeOpacity: 0.9,
         strokeStyle: 'shortdash',
-        map
+        map: kakaoMap
       });
 
       for(let i = 1; i < day.places.length; i++){
@@ -1422,10 +1567,10 @@ function renderMap(){
         const overlay = new kakao.maps.CustomOverlay({
           position: new kakao.maps.LatLng(midLat, midLng),
           content: el,
-          map: map,
+          map: kakaoMap,
           zIndex: 2
         });
-        runtime.legOverlays.push(overlay);
+        kakaoRuntime.legOverlays.push(overlay);
       }
     }
   }
@@ -1438,15 +1583,15 @@ function renderMap(){
     el.className = 'stay-el';
     el.innerHTML = `<span>🏨</span>`;
     el.title = `숙소: ${day.stay.name}`;
-    runtime.stayMarker = new kakao.maps.CustomOverlay({
+    kakaoRuntime.stayMarker = new kakao.maps.CustomOverlay({
       position: stayPos,
       content: el,
-      map: map,
+      map: kakaoMap,
       zIndex: 4
     });
   }
 
-  if(hasBoundsPoint) map.setBounds(bounds);
+  if(hasBoundsPoint) kakaoMap.setBounds(bounds);
 }
 
 function renderSummary(){
@@ -1702,6 +1847,8 @@ function checkIncomingSharedTrip(){
 }
 
 /* ---------- 시작 ---------- */
+initLeafletMap();
+renderAll();
 loadKakaoSDK();
 checkIncomingSharedTrip();
 </script>
